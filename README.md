@@ -13,17 +13,22 @@ This project builds a healthcare cost forecasting model and independently valida
 * **Stack:** SQL (SQLite) · Python (pandas, scikit-learn, SciPy, matplotlib) · Excel (formulas, conditional formatting, charts, Excel Tables) · GitHub Actions CI · GitHub Pages dashboard.
 
 <!-- RESULTS:START -->
-### Headline results (out-of-time: 2009 features → actual 2010 cost, 106,186 beneficiaries)
+### Headline results
+
+**In-time hold-out** (2008 features → 2009 cost, 31,403 beneficiaries) and **out-of-time** (2009 features → 2010 cost, 106,186 beneficiaries; predictions normalised to the 2010 total, like CMS annual risk-score normalisation):
 
 | | Champion GBM | Tweedie GLM | Demographic manual rate |
 |---|---|---|---|
-| R² | -0.251 | -0.234 | -0.116 |
-| Cumming's Prediction Measure | -0.424 | -0.444 | -0.422 |
-| Predictive ratio | 1.935 | 1.953 | 1.747 |
-| Share of 2010 cost in top-10% predicted | 24.8% | 24.0% | 19.9% |
+| R², in-time | **0.295** | 0.273 | 0.060 |
+| Cumming's Prediction Measure, in-time | **0.254** | 0.244 | 0.044 |
+| Gini (cost ranking), in-time | **0.692** | 0.682 | 0.252 |
+| R², out-of-time normalised | **0.123** | 0.112 | 0.023 |
+| Gini, out-of-time | **0.547** | 0.537 | 0.191 |
 
-High-cost claimant classifier: **AUC 0.733**, **3.1× lift** in the top decile. Score PSI 0.046.
-**Validation rating:** Needs improvement - conditionally fit for use with compensating controls (1 High / 2 Medium / 5 Low findings). *Data: CMS 2008-2010 Data Entrepreneurs' Synthetic Public Use File (DE-SynPUF), Sample 1; run 2026-10-06.*
+High-cost claimant classifier: **AUC 0.800** in-time (**3.7× lift** in top decile); AUC 0.731 out-of-time.
+
+**Key validation finding:** the raw out-of-time predictive ratio is **1.94**. The validation traced this to a -41% change in mean paid cost per beneficiary in the 2010 source data (DE-SynPUF 2010 claims are incomplete), while the input score distribution stayed stable (PSI 0.046). The model is rated not fit for budgeting without an annual normalisation factor.
+**Validation rating:** Needs improvement - conditionally fit for use with compensating controls (1 High / 3 Medium / 5 Low findings). *Data: CMS 2008-2010 Data Entrepreneurs' Synthetic Public Use File (DE-SynPUF), Sample 1; run 2026-10-06.*
 <!-- RESULTS:END -->
 
 ## What the project does

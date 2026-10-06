@@ -18,19 +18,26 @@ cost history. A companion classifier flags likely **high-cost claimants** (top 1
 threshold $12,030). Intended uses: medical cost forecasting / budget planning, care-management targeting and
 actuarial risk stratification.
 
-**Key results (out-of-time backtest, features 2009 -> actual 2010 cost, n = 106,186):**
+**Key results** (in-time = 2008 features -> 2009 cost hold-out, n = 31,403; out-of-time (OOT) = 2009 features -> 2010 cost, n = 106,186):
 
-| Metric | Value | 95% bootstrap CI |
-|---|---|---|
-| R-squared (cost) | -0.251 | -0.282 - -0.221 |
-| Cumming's Prediction Measure | -0.424 | -0.441 - -0.406 |
-| Predictive ratio (predicted / actual) | 1.935 | 1.914 - 1.958 |
-| Share of actual cost in top-10% predicted | 24.8% | |
-| High-cost claimant AUC | 0.733 | 0.726 - 0.740 |
-| High-cost lift in top decile | 3.08x | |
-| Score PSI (development vs OOT) | 0.046 | |
+| Metric | In-time test | OOT raw | OOT normalised* | 95% CI (OOT) |
+|---|---|---|---|---|
+| R-squared (cost) | 0.295 | -0.251 | 0.123 | 0.115 - 0.133 (norm.) |
+| Cumming's Prediction Measure | 0.254 | -0.424 | 0.165 | 0.161 - 0.169 (norm.) |
+| Predictive ratio (predicted / actual) | 1.016 | 1.935 | 1.000 | 1.914 - 1.958 (raw) |
+| Normalised Gini (ranking) | 0.692 | 0.547 | 0.547 | |
+| Share of actual cost in top-10% predicted | 32.0% | 24.8% | 24.8% | |
+| High-cost claimant AUC | 0.800 | 0.733 | 0.731 (relative top 10%) | 0.726 - 0.740 (raw) |
+| High-cost lift in top decile | 3.73x | 3.08x | 2.75x | |
+| Score PSI (development vs OOT) | | 0.046 | | |
 
-**Findings:** 1 High, 2 Medium, 5 Low - see Section 10.
+\* *Normalised* = OOT predictions rescaled by a single factor (0.517) so they sum to actual 2010 cost,
+equivalent to the annual normalisation CMS applies to HCC risk scores. It isolates **ranking / relative accuracy** from
+the **level shift** in the outcome year. For the high-cost classifier, "relative" re-defines a high-cost claimant as the top 10% of 2010 cost.
+
+> **Key validation finding.** The raw OOT predictive ratio is **1.94**. Mean Medicare paid cost per beneficiary changes -41% from 2009 to 2010 in the source data (DQ-18), while the input score distribution is stable (PSI 0.046). This points to incomplete 2010 claims in DE-SynPUF rather than a change in the population or the model. Ranking performance holds after normalisation (Gini 0.547 vs 0.692 in-time).
+
+**Findings:** 1 High, 3 Medium, 5 Low - see Section 10.
 
 ## 2. Model purpose, scope and design
 
@@ -59,33 +66,34 @@ Source tables were loaded to SQLite and transformed with version-controlled SQL 
 
 ### 3.1 Data quality testing
 
-| check_id   | category       | description                                                    |    observed |   threshold | status   |
-|:-----------|:---------------|:---------------------------------------------------------------|------------:|------------:|:---------|
-| DQ-01      | Volume         | Beneficiary records in 2008 summary file                       | 116352.0000 |      0.0000 | INFO     |
-| DQ-02      | Volume         | Beneficiary records in 2009 summary file                       | 114538.0000 |      0.0000 | INFO     |
-| DQ-03      | Volume         | Beneficiary records in 2010 summary file                       | 112754.0000 |      0.0000 | INFO     |
-| DQ-04      | Uniqueness     | Duplicate beneficiary-year keys                                |      0.0000 |      0.0000 | PASS     |
-| DQ-05      | Uniqueness     | Duplicate inpatient claim keys (CLM_ID+SEGMENT)                |      0.0000 |      0.0000 | PASS     |
-| DQ-06      | Uniqueness     | Duplicate outpatient claim keys (CLM_ID+SEGMENT)               |      0.0000 |      0.0000 | PASS     |
-| DQ-07      | Completeness   | Share of beneficiaries missing birth date                      |      0.0000 |      0.0000 | PASS     |
-| DQ-08      | Validity       | Share with implausible age (<18 or >110)                       |      0.0000 |      0.0010 | PASS     |
-| DQ-09      | Validity       | Share of bene-years with negative Medicare reimbursement       |      0.0007 |      0.0010 | PASS     |
-| DQ-10      | Validity       | Share of inpatient claims with negative payment                |      0.0008 |      0.0010 | PASS     |
-| DQ-11      | Validity       | Share of inpatient claims with through-date before from-date   |      0.0000 |      0.0010 | PASS     |
-| DQ-12      | Completeness   | Share of outpatient claims missing service from-date           |      0.0142 |      0.0100 | WARN     |
-| DQ-13      | Validity       | Share of inpatient claims outside 2008-2010 window             |      0.0034 |      0.0100 | PASS     |
-| DQ-14      | Completeness   | Share of outpatient claims missing principal diagnosis         |      0.0071 |      0.0200 | PASS     |
-| DQ-15      | Integrity      | Share of inpatient claimants not found in any beneficiary file |      0.0000 |      0.0010 | PASS     |
-| DQ-16      | Consistency    | Share of inpatient claims (decedents) dated after death        |      0.0000 |      0.0100 | PASS     |
-| DQ-17      | Reconciliation | Max |IP claims total / summary MEDREIMB_IP - 1| across years   |      0.0523 |      0.0500 | WARN     |
+| check_id   | category       | description                                                       |    observed |   threshold | status   |
+|:-----------|:---------------|:------------------------------------------------------------------|------------:|------------:|:---------|
+| DQ-01      | Volume         | Beneficiary records in 2008 summary file                          | 116352.0000 |      0.0000 | INFO     |
+| DQ-02      | Volume         | Beneficiary records in 2009 summary file                          | 114538.0000 |      0.0000 | INFO     |
+| DQ-03      | Volume         | Beneficiary records in 2010 summary file                          | 112754.0000 |      0.0000 | INFO     |
+| DQ-04      | Uniqueness     | Duplicate beneficiary-year keys                                   |      0.0000 |      0.0000 | PASS     |
+| DQ-05      | Uniqueness     | Duplicate inpatient claim keys (CLM_ID+SEGMENT)                   |      0.0000 |      0.0000 | PASS     |
+| DQ-06      | Uniqueness     | Duplicate outpatient claim keys (CLM_ID+SEGMENT)                  |      0.0000 |      0.0000 | PASS     |
+| DQ-07      | Completeness   | Share of beneficiaries missing birth date                         |      0.0000 |      0.0000 | PASS     |
+| DQ-08      | Validity       | Share with implausible age (<18 or >110)                          |      0.0000 |      0.0010 | PASS     |
+| DQ-09      | Validity       | Share of bene-years with negative Medicare reimbursement          |      0.0007 |      0.0010 | PASS     |
+| DQ-10      | Validity       | Share of inpatient claims with negative payment                   |      0.0008 |      0.0010 | PASS     |
+| DQ-11      | Validity       | Share of inpatient claims with through-date before from-date      |      0.0000 |      0.0010 | PASS     |
+| DQ-12      | Completeness   | Share of outpatient claims missing service from-date              |      0.0142 |      0.0100 | WARN     |
+| DQ-13      | Validity       | Share of inpatient claims outside 2008-2010 window                |      0.0034 |      0.0100 | PASS     |
+| DQ-14      | Completeness   | Share of outpatient claims missing principal diagnosis            |      0.0071 |      0.0200 | PASS     |
+| DQ-15      | Integrity      | Share of inpatient claimants not found in any beneficiary file    |      0.0000 |      0.0010 | PASS     |
+| DQ-16      | Consistency    | Share of inpatient claims (decedents) dated after death           |      0.0000 |      0.0100 | PASS     |
+| DQ-17      | Reconciliation | Max |IP claims total / summary MEDREIMB_IP - 1| across years      |      0.0523 |      0.0500 | WARN     |
+| DQ-18      | Completeness   | Max |year-over-year change| in mean Medicare paid per beneficiary |      0.4132 |      0.0500 | FAIL     |
 
 Inpatient claim-to-summary reconciliation (claims `CLM_PMT_AMT` vs summary `MEDREIMB_IP`):
 
-|       yr |    summary_ip |     claims_ip |   ratio_claims_to_summary |
-|---------:|--------------:|--------------:|--------------------------:|
-| 2008.000 | 257624360.000 | 257732880.000 |                     1.000 |
-| 2009.000 | 250842760.000 | 244810270.000 |                     0.976 |
-| 2010.000 | 139989740.000 | 132669330.000 |                     0.948 |
+|       yr |    summary_ip |     claims_ip |   ratio_claims_to_summary |   mean_paid |   yoy_change |
+|---------:|--------------:|--------------:|--------------------------:|------------:|-------------:|
+| 2008.000 | 257624360.000 | 257732880.000 |                     1.000 |    3998.503 |      nan     |
+| 2009.000 | 250842760.000 | 244810270.000 |                     0.976 |    4297.398 |        0.075 |
+| 2010.000 | 139989740.000 | 132669330.000 |                     0.948 |    2521.583 |       -0.413 |
 
 ## 4. Conceptual soundness
 
@@ -121,19 +129,25 @@ Inpatient claim-to-summary reconciliation (claims `CLM_PMT_AMT` vs summary `MEDR
 | M0 Naive persistence            | Train          | -0.681 |  0.011 | 4890.867 |              1.089 |  0.580 |                0.267 |
 | M0 Naive persistence            | Test (in-time) | -0.721 |  0.006 | 4836.284 |              1.111 |  0.584 |                0.274 |
 | M0 Naive persistence            | OOT 2009->2010 | -2.073 | -0.620 | 4723.924 |              1.950 |  0.442 |                0.192 |
+| M0 Naive persistence            | OOT normalised | -0.353 | -0.024 | 2984.101 |              1.000 |  0.442 |                0.192 |
 | M1 Demographic manual rate      | Train          |  0.055 |  0.050 | 4696.698 |              0.967 |  0.238 |                0.278 |
 | M1 Demographic manual rate      | Test (in-time) |  0.060 |  0.044 | 4653.088 |              0.987 |  0.252 |                0.294 |
 | M1 Demographic manual rate      | OOT 2009->2010 | -0.116 | -0.422 | 4146.560 |              1.747 |  0.191 |                0.199 |
+| M1 Demographic manual rate      | OOT normalised |  0.023 |  0.021 | 2855.272 |              1.000 |  0.191 |                0.199 |
 | M2 Tweedie GLM                  | Train          |  0.256 |  0.246 | 3726.681 |              1.000 |  0.678 |                0.305 |
 | M2 Tweedie GLM                  | Test (in-time) |  0.273 |  0.244 | 3681.595 |              1.014 |  0.682 |                0.313 |
 | M2 Tweedie GLM                  | OOT 2009->2010 | -0.234 | -0.444 | 4210.552 |              1.953 |  0.537 |                0.240 |
+| M2 Tweedie GLM                  | OOT normalised |  0.112 |  0.154 | 2466.727 |              1.000 |  0.537 |                0.240 |
 | M3 Gradient boosting (champion) | Train          |  0.300 |  0.266 | 3626.317 |              1.002 |  0.697 |                0.320 |
 | M3 Gradient boosting (champion) | Test (in-time) |  0.295 |  0.254 | 3629.249 |              1.016 |  0.692 |                0.320 |
 | M3 Gradient boosting (champion) | OOT 2009->2010 | -0.251 | -0.424 | 4150.467 |              1.935 |  0.547 |                0.248 |
+| M3 Gradient boosting (champion) | OOT normalised |  0.123 |  0.165 | 2435.430 |              1.000 |  0.547 |                0.248 |
 
 ![benchmark](figures/benchmark_cpm_oot.png)
 
-### 5.2 Decile backtest (OOT)
+### 5.2 Decile backtests
+
+OOT raw:
 
 |   decile |         n |       pred_sum |    actual_sum |   mean_pred |   mean_actual |   predictive_ratio |
 |---------:|----------:|---------------:|--------------:|------------:|--------------:|-------------------:|
@@ -148,18 +162,35 @@ Inpatient claim-to-summary reconciliation (claims `CLM_PMT_AMT` vs summary `MEDR
 |     9.00 | 10,618.00 |  94,111,557.28 | 45,340,730.00 |    8,863.40 |      4,270.18 |               2.08 |
 |    10.00 | 10,619.00 | 154,346,813.77 | 70,194,530.00 |   14,534.97 |      6,610.28 |               2.20 |
 
+OOT normalised (factor 0.517):
+
+|   decile |         n |      pred_sum |    actual_sum |   mean_pred |   mean_actual |   predictive_ratio |
+|---------:|----------:|--------------:|--------------:|------------:|--------------:|-------------------:|
+|     1.00 | 10,619.00 |    876,612.40 |  1,323,380.00 |       82.55 |        124.62 |               0.66 |
+|     2.00 | 10,619.00 |  2,719,761.13 |  3,545,860.00 |      256.12 |        333.92 |               0.77 |
+|     3.00 | 10,618.00 | 11,252,965.69 | 11,514,240.00 |    1,059.80 |      1,084.41 |               0.98 |
+|     4.00 | 10,619.00 | 18,115,997.42 | 20,688,150.00 |    1,706.00 |      1,948.22 |               0.88 |
+|     5.00 | 10,618.00 | 22,917,111.23 | 25,984,700.00 |    2,158.33 |      2,447.23 |               0.88 |
+|     6.00 | 10,619.00 | 27,289,792.36 | 31,286,140.00 |    2,569.90 |      2,946.24 |               0.87 |
+|     7.00 | 10,618.00 | 32,263,153.04 | 33,758,830.00 |    3,038.53 |      3,179.40 |               0.96 |
+|     8.00 | 10,619.00 | 38,754,103.91 | 38,937,460.00 |    3,649.51 |      3,666.77 |               1.00 |
+|     9.00 | 10,618.00 | 48,629,745.59 | 45,340,730.00 |    4,579.93 |      4,270.18 |               1.07 |
+|    10.00 | 10,619.00 | 79,754,777.23 | 70,194,530.00 |    7,510.57 |      6,610.28 |               1.14 |
+
 ![decile](figures/decile_backtest_oot.png)
 
 ### 5.3 High-cost claimant classifier
 
-| model                           | sample         |   AUC |   Gini |    KS |   Brier |   Precision_top10 |   Lift_top10 |   HL_pvalue |
-|:--------------------------------|:---------------|------:|-------:|------:|--------:|------------------:|-------------:|------------:|
-| C1 Logistic regression          | Train          | 0.799 |  0.599 | 0.436 |   0.077 |             0.361 |        3.604 |       0.000 |
-| C1 Logistic regression          | Test (in-time) | 0.798 |  0.596 | 0.431 |   0.076 |             0.358 |        3.641 |       0.000 |
-| C1 Logistic regression          | OOT 2009->2010 | 0.730 |  0.460 | 0.316 |   0.053 |             0.144 |        2.977 |       0.000 |
-| C2 Gradient boosting (champion) | Train          | 0.837 |  0.674 | 0.495 |   0.071 |             0.426 |        4.257 |       0.000 |
-| C2 Gradient boosting (champion) | Test (in-time) | 0.800 |  0.600 | 0.435 |   0.074 |             0.367 |        3.731 |       0.062 |
-| C2 Gradient boosting (champion) | OOT 2009->2010 | 0.733 |  0.465 | 0.318 |   0.053 |             0.149 |        3.076 |       0.000 |
+| model                           | sample               |   AUC |   Gini |    KS |   Brier |   Precision_top10 |   Lift_top10 |   HL_pvalue |
+|:--------------------------------|:---------------------|------:|-------:|------:|--------:|------------------:|-------------:|------------:|
+| C1 Logistic regression          | Train                | 0.799 |  0.599 | 0.436 |   0.077 |             0.361 |        3.604 |       0.000 |
+| C1 Logistic regression          | Test (in-time)       | 0.798 |  0.596 | 0.431 |   0.076 |             0.358 |        3.641 |       0.000 |
+| C1 Logistic regression          | OOT 2009->2010       | 0.730 |  0.460 | 0.316 |   0.053 |             0.144 |        2.977 |       0.000 |
+| C1 Logistic regression          | OOT relative top 10% | 0.730 |  0.459 | 0.319 |   0.085 |             0.268 |        2.675 |       0.000 |
+| C2 Gradient boosting (champion) | Train                | 0.837 |  0.674 | 0.495 |   0.071 |             0.426 |        4.257 |       0.000 |
+| C2 Gradient boosting (champion) | Test (in-time)       | 0.800 |  0.600 | 0.435 |   0.074 |             0.367 |        3.731 |       0.062 |
+| C2 Gradient boosting (champion) | OOT 2009->2010       | 0.733 |  0.465 | 0.318 |   0.053 |             0.149 |        3.076 |       0.000 |
+| C2 Gradient boosting (champion) | OOT relative top 10% | 0.731 |  0.461 | 0.320 |   0.084 |             0.275 |        2.747 |       0.000 |
 
 ![roc](figures/classifier_roc_calibration_oot.png)
 
@@ -196,22 +227,22 @@ Top characteristic stability indices (CSI):
 | n_chronic +1 for all members |              0.028 |
 | ip_admits +1 for all members |              0.017 |
 
-**Seed, hyper-parameter and feature-ablation re-fits (OOT metrics):**
+**Seed, hyper-parameter and feature-ablation re-fits (OOT; R2/CPM after normalisation, plus raw predictive ratio):**
 
-| test                         | group          |     R2 |    CPM |   Predictive_ratio |   Gini |
-|:-----------------------------|:---------------|-------:|-------:|-------------------:|-------:|
-| Seed 1                       | seed           | -0.255 | -0.425 |              1.938 |  0.547 |
-| Seed 2                       | seed           | -0.248 | -0.424 |              1.933 |  0.546 |
-| Seed 3                       | seed           | -0.247 | -0.422 |              1.932 |  0.547 |
-| Seed 4                       | seed           | -0.249 | -0.418 |              1.925 |  0.546 |
-| Seed 5                       | seed           | -0.239 | -0.412 |              1.919 |  0.547 |
-| learning_rate=0.10           | hyperparameter | -0.259 | -0.423 |              1.937 |  0.548 |
-| max_leaf_nodes=15            | hyperparameter | -0.251 | -0.424 |              1.935 |  0.547 |
-| max_leaf_nodes=63            | hyperparameter | -0.257 | -0.416 |              1.923 |  0.545 |
-| loss=squared_error           | hyperparameter | -0.237 | -0.430 |              1.939 |  0.544 |
-| Drop prior-cost features     | ablation       | -0.246 | -0.433 |              1.918 |  0.512 |
-| Drop claims-derived features | ablation       | -0.252 | -0.434 |              1.940 |  0.537 |
-| Drop chronic-condition flags | ablation       | -0.247 | -0.424 |              1.935 |  0.545 |
+| test                         | group          |   R2_norm |   CPM_norm |   Gini |   Raw_predictive_ratio |
+|:-----------------------------|:---------------|----------:|-----------:|-------:|-----------------------:|
+| Seed 1                       | seed           |     0.123 |      0.165 |  0.547 |                  1.938 |
+| Seed 2                       | seed           |     0.122 |      0.164 |  0.546 |                  1.933 |
+| Seed 3                       | seed           |     0.123 |      0.164 |  0.547 |                  1.932 |
+| Seed 4                       | seed           |     0.121 |      0.164 |  0.546 |                  1.925 |
+| Seed 5                       | seed           |     0.123 |      0.165 |  0.547 |                  1.919 |
+| learning_rate=0.10           | hyperparameter |     0.123 |      0.165 |  0.548 |                  1.937 |
+| max_leaf_nodes=15            | hyperparameter |     0.123 |      0.165 |  0.547 |                  1.935 |
+| max_leaf_nodes=63            | hyperparameter |     0.120 |      0.164 |  0.545 |                  1.923 |
+| loss=squared_error           | hyperparameter |     0.121 |      0.161 |  0.544 |                  1.939 |
+| Drop prior-cost features     | ablation       |     0.098 |      0.138 |  0.512 |                  1.918 |
+| Drop claims-derived features | ablation       |     0.117 |      0.160 |  0.537 |                  1.940 |
+| Drop chronic-condition flags | ablation       |     0.122 |      0.164 |  0.545 |                  1.935 |
 
 ## 8. Explainability
 
@@ -223,31 +254,33 @@ Top characteristic stability indices (CSI):
 
 ![subgroups](figures/subgroup_predictive_ratio.png)
 
+Predictive ratios below use OOT predictions after aggregate normalisation (relative calibration by segment).
+
 | dimension       | level    |     n |   actual_mean |   pred_mean |   predictive_ratio |
 |:----------------|:---------|------:|--------------:|------------:|-------------------:|
-| age_band        | 65-69    | 20147 |      2290.716 |    4446.112 |              1.941 |
-| age_band        | 70-74    | 21112 |      2475.800 |    4781.355 |              1.931 |
-| age_band        | 75-79    | 17646 |      2671.379 |    5215.740 |              1.952 |
-| age_band        | 80-84    | 14350 |      2926.113 |    5550.830 |              1.897 |
-| age_band        | 85+      | 16475 |      3104.957 |    5920.728 |              1.907 |
-| age_band        | <65      | 16456 |      2665.949 |    5292.971 |              1.985 |
-| sex             | Female   | 59488 |      2682.651 |    5244.990 |              1.955 |
-| sex             | Male     | 46698 |      2633.700 |    5028.959 |              1.909 |
-| race            | Black    | 10922 |      2559.744 |    5021.638 |              1.962 |
-| race            | Hispanic |  2471 |      2408.195 |    4420.931 |              1.836 |
-| race            | Other    |  4338 |      2302.077 |    4401.901 |              1.912 |
-| race            | White    | 88455 |      2698.315 |    5222.886 |              1.936 |
-| esrd_status     | ESRD     | 10677 |      5265.278 |   11103.227 |              2.109 |
-| esrd_status     | Non-ESRD | 95509 |      2370.003 |    4484.469 |              1.892 |
-| chronic_band    | 0        | 30025 |       601.335 |    1014.308 |              1.687 |
-| chronic_band    | 1-2      | 25508 |      2278.228 |    3918.854 |              1.720 |
-| chronic_band    | 3-4      | 23478 |      3348.605 |    6257.621 |              1.869 |
-| chronic_band    | 5+       | 27175 |      4702.386 |    9918.053 |              2.109 |
-| prior_cost_band | $0       | 15657 |       155.355 |     181.273 |              1.167 |
-| prior_cost_band | $1-1k    | 23850 |      1294.676 |    2245.098 |              1.734 |
-| prior_cost_band | $1k-5k   | 42104 |      3281.310 |    5832.384 |              1.777 |
-| prior_cost_band | $20k+    |  5153 |      6029.701 |   13497.159 |              2.238 |
-| prior_cost_band | $5k-20k  | 19422 |      4120.908 |    9028.676 |              2.191 |
+| age_band        | 65-69    | 20147 |      2290.716 |    2297.415 |              1.003 |
+| age_band        | 70-74    | 21112 |      2475.800 |    2470.643 |              0.998 |
+| age_band        | 75-79    | 17646 |      2671.379 |    2695.101 |              1.009 |
+| age_band        | 80-84    | 14350 |      2926.113 |    2868.250 |              0.980 |
+| age_band        | 85+      | 16475 |      3104.957 |    3059.385 |              0.985 |
+| age_band        | <65      | 16456 |      2665.949 |    2735.008 |              1.026 |
+| sex             | Female   | 59488 |      2682.651 |    2710.215 |              1.010 |
+| sex             | Male     | 46698 |      2633.700 |    2598.586 |              0.987 |
+| race            | Black    | 10922 |      2559.744 |    2594.803 |              1.014 |
+| race            | Hispanic |  2471 |      2408.195 |    2284.404 |              0.949 |
+| race            | Other    |  4338 |      2302.077 |    2274.570 |              0.988 |
+| race            | White    | 88455 |      2698.315 |    2698.793 |              1.000 |
+| esrd_status     | ESRD     | 10677 |      5265.278 |    5737.309 |              1.090 |
+| esrd_status     | Non-ESRD | 95509 |      2370.003 |    2317.235 |              0.978 |
+| chronic_band    | 0        | 30025 |       601.335 |     524.118 |              0.872 |
+| chronic_band    | 1-2      | 25508 |      2278.228 |    2024.968 |              0.889 |
+| chronic_band    | 3-4      | 23478 |      3348.605 |    3233.466 |              0.966 |
+| chronic_band    | 5+       | 27175 |      4702.386 |    5124.901 |              1.090 |
+| prior_cost_band | $0       | 15657 |       155.355 |      93.668 |              0.603 |
+| prior_cost_band | $1-1k    | 23850 |      1294.676 |    1160.097 |              0.896 |
+| prior_cost_band | $1k-5k   | 42104 |      3281.310 |    3013.735 |              0.918 |
+| prior_cost_band | $20k+    |  5153 |      6029.701 |    6974.312 |              1.157 |
+| prior_cost_band | $5k-20k  | 19422 |      4120.908 |    4665.338 |              1.132 |
 
 High-cost classifier disparity review (race is not a model input):
 
@@ -262,16 +295,17 @@ High-cost classifier disparity review (race is not a model input):
 
 ## 10. Findings and recommendations
 
-| id   | area                 | severity   | finding                                                             | evidence                                                                                                                                         | recommendation                                                                                            |
-|:-----|:---------------------|:-----------|:--------------------------------------------------------------------|:-------------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------------------------------------------------------------------|
-| F-01 | Data quality         | Low        | DQ-12: Share of outpatient claims missing service from-date         | Observed 0.0142 vs threshold 0.01                                                                                                                | Document root cause with data owner; add exclusion or correction rule and monitor in production.          |
-| F-02 | Data quality         | Low        | DQ-17: Max |IP claims total / summary MEDREIMB_IP - 1| across years | Observed 0.0523 vs threshold 0.05                                                                                                                | Document root cause with data owner; add exclusion or correction rule and monitor in production.          |
-| F-03 | Outcome analysis     | High       | Aggregate out-of-time calibration outside +/-5% tolerance           | OOT predictive ratio 1.935 (in-time 1.016); mean actual $2,661 vs predicted $5,150                                                               | Introduce an explicit annual cost-trend / calibration factor refreshed each year before use in budgeting. |
-| F-04 | Outcome analysis     | Medium     | Material out-of-time deterioration in explanatory power             | R2 in-time 0.295 vs OOT -0.251                                                                                                                   | Investigate drivers (population shift, coding changes); consider re-training on pooled years.             |
-| F-05 | Stability            | Low        | Feature distribution shift (CSI > 0.10)                             | part_d_mos=0.12                                                                                                                                  | Review whether shift is real (population/coding) or a data artefact; monitor quarterly.                   |
-| F-06 | Outcome analysis     | Medium     | Subgroup mis-calibration (predictive ratio outside 0.85-1.15)       | age_band=65-69: PR 1.94; age_band=70-74: PR 1.93; age_band=75-79: PR 1.95; age_band=80-84: PR 1.90; age_band=85+: PR 1.91; age_band=<65: PR 1.99 | Add segment-level calibration or interaction terms; communicate known biases to model users.              |
-| F-07 | Conceptual soundness | Low        | Synthetic data limits clinical credibility of relationships         | CMS DE-SynPUF perturbs and synthesises variables, weakening true clinical-cost associations; Carrier and Part D detail not used as features.     | Re-estimate and re-validate on production claims (with Carrier and PDE) before any business use.          |
-| F-08 | Implementation       | Low        | Model monitoring plan required                                      | No production monitoring exists for this development model.                                                                                      | Monthly: PSI/CSI, predictive ratio by segment, HCC precision@10%; annual full re-validation.              |
+| id   | area                 | severity   | finding                                                                                    | evidence                                                                                                                                                                                                                                                                                                                                                                  | recommendation                                                                                                                                                                                            |
+|:-----|:---------------------|:-----------|:-------------------------------------------------------------------------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| F-01 | Data quality         | Low        | DQ-12: Share of outpatient claims missing service from-date                                | Observed 0.0142 vs threshold 0.01                                                                                                                                                                                                                                                                                                                                         | Document root cause with data owner; add exclusion or correction rule and monitor in production.                                                                                                          |
+| F-02 | Data quality         | Low        | DQ-17: Max |IP claims total / summary MEDREIMB_IP - 1| across years                        | Observed 0.0523 vs threshold 0.05                                                                                                                                                                                                                                                                                                                                         | Document root cause with data owner; add exclusion or correction rule and monitor in production.                                                                                                          |
+| F-03 | Data quality         | Medium     | DQ-18: Max |year-over-year change| in mean Medicare paid per beneficiary                   | Observed 0.4132 vs threshold 0.05                                                                                                                                                                                                                                                                                                                                         | Document root cause with data owner; add exclusion or correction rule and monitor in production.                                                                                                          |
+| F-04 | Outcome analysis     | High       | Aggregate out-of-time calibration outside +/-5% tolerance                                  | OOT predictive ratio 1.935 (in-time 1.016); mean actual $2,661 vs predicted $5,150. Root cause: mean paid cost per beneficiary moved 41% year-on-year in the outcome data (DQ-18) while input score distribution is stable (PSI 0.046), pointing to incomplete target-year claims rather than population change. After normalisation ranking holds: R2 0.123, Gini 0.547. | Do not use raw predictions for budgeting without an annual trend / normalisation factor; confirm claims completeness (run-out) of the outcome year before back-testing; re-run OOT test on complete data. |
+| F-05 | Outcome analysis     | Medium     | Material out-of-time deterioration in explanatory power (after normalisation)              | R2 in-time 0.295 vs OOT normalised 0.123; Gini 0.692 vs 0.547                                                                                                                                                                                                                                                                                                             | Investigate drivers (population shift, coding changes); consider re-training on pooled years.                                                                                                             |
+| F-06 | Stability            | Low        | Feature distribution shift (CSI > 0.10)                                                    | part_d_mos=0.12                                                                                                                                                                                                                                                                                                                                                           | Review whether shift is real (population/coding) or a data artefact; monitor quarterly.                                                                                                                   |
+| F-07 | Outcome analysis     | Medium     | Relative subgroup mis-calibration after normalisation (predictive ratio outside 0.85-1.15) | prior_cost_band=$0: PR 0.60; prior_cost_band=$20k+: PR 1.16                                                                                                                                                                                                                                                                                                               | Add segment-level calibration or interaction terms; communicate known biases to model users.                                                                                                              |
+| F-08 | Conceptual soundness | Low        | Synthetic data limits clinical credibility of relationships                                | CMS DE-SynPUF perturbs and synthesises variables, weakening true clinical-cost associations; Carrier and Part D detail not used as features.                                                                                                                                                                                                                              | Re-estimate and re-validate on production claims (with Carrier and PDE) before any business use.                                                                                                          |
+| F-09 | Implementation       | Low        | Model monitoring plan required                                                             | No production monitoring exists for this development model.                                                                                                                                                                                                                                                                                                               | Monthly: PSI/CSI, predictive ratio by segment, HCC precision@10%; annual full re-validation.                                                                                                              |
 
 ## 11. Ongoing monitoring plan
 
