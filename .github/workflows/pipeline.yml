@@ -1,0 +1,64 @@
+name: Model validation pipeline
+
+on:
+  workflow_dispatch:          # "Run workflow" button in the Actions tab
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "sql/**"
+      - "tests/**"
+      - "scripts/**"
+      - "run_pipeline.py"
+      - "requirements.txt"
+      - ".github/workflows/pipeline.yml"
+
+permissions:
+  contents: write             # lets the job commit regenerated results
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Unit tests + synthetic smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q tests
+      - name: End-to-end run on generated test sample
+        run: python run_pipeline.py --synthetic
+
+  validate-on-cms-data:
+    name: Full pipeline on CMS DE-SynPUF Sample 1
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r requirements.txt
+      - name: Download CMS DE-SynPUF Sample 1
+        run: bash scripts/download_synpuf.sh
+      - name: Run pipeline (SQL features -> models -> validation -> report/Excel/dashboard)
+        run: python run_pipeline.py
+      - name: Commit regenerated results
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add reports excel docs outputs README.md
+          git diff --cached --quiet || git commit -m "Regenerate validation results on CMS DE-SynPUF Sample 1 [skip ci]"
+          git push
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validation-outputs
+          path: |
+            reports/
+            excel/
+            docs/
+            outputs/
