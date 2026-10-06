@@ -28,6 +28,7 @@ This project builds a healthcare cost forecasting model and independently valida
 High-cost claimant classifier: **AUC 0.800** in-time (**3.7× lift** in top decile); AUC 0.731 out-of-time.
 
 **Key validation finding:** the raw out-of-time predictive ratio is **1.94**. The validation traced this to a -41% change in mean paid cost per beneficiary in the 2010 source data (DE-SynPUF 2010 claims are incomplete), while the input score distribution stayed stable (PSI 0.046). The model is rated not fit for budgeting without an annual normalisation factor.
+
 **Validation rating:** Needs improvement - conditionally fit for use with compensating controls (1 High / 3 Medium / 5 Low findings). *Data: CMS 2008-2010 Data Entrepreneurs' Synthetic Public Use File (DE-SynPUF), Sample 1; run 2026-10-06.*
 <!-- RESULTS:END -->
 
@@ -43,11 +44,11 @@ CMS DE-SynPUF CSVs ──► SQLite staging ──► SQL feature layer ──�
               ┌────────────────────────────┴────────────────────────────┐
               ▼                                                         ▼
    MODEL DEVELOPMENT (1st line)                         INDEPENDENT VALIDATION (2nd line)
-   M0 Trended persistence (benchmark)                   • 17 data-quality tests incl. claim↔summary reconciliation
+   M0 Trended persistence (benchmark)                   • 18 data-quality tests incl. reconciliation, run-out
    M1 Credibility-weighted demographic manual rate      • Leakage & conceptual-soundness review
    M2 Tweedie GLM (log link, p = 1.5)                   • Benchmarking vs actuarial & GLM challengers
    M3 Poisson gradient boosting  ◄ champion             • R², Cumming's Prediction Measure, predictive ratios, Gini
-   C1 Logistic regression / C2 GBM classifier           • Decile backtests (in-time & out-of-time), bootstrap CIs
+   C1 Logistic regression / C2 GBM classifier           • Decile backtests (in-time, OOT raw & normalised), CIs
       for high-cost claimants (top 10%)                 • AUC, KS, lift, Brier, Hosmer-Lemeshow
                                                         • PSI / CSI stability · sensitivity shocks · seed,
                                                           hyper-parameter and feature-ablation re-fits
