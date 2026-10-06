@@ -13,7 +13,17 @@ This project builds a healthcare cost forecasting model and independently valida
 * **Stack:** SQL (SQLite) · Python (pandas, scikit-learn, SciPy, matplotlib) · Excel (formulas, conditional formatting, charts, Excel Tables) · GitHub Actions CI · GitHub Pages dashboard.
 
 <!-- RESULTS:START -->
-*Results appear here after the GitHub Actions pipeline runs on the CMS data.*
+### Headline results (out-of-time: 2009 features → actual 2010 cost, 106,186 beneficiaries)
+
+| | Champion GBM | Tweedie GLM | Demographic manual rate |
+|---|---|---|---|
+| R² | -0.251 | -0.234 | -0.116 |
+| Cumming's Prediction Measure | -0.424 | -0.444 | -0.422 |
+| Predictive ratio | 1.935 | 1.953 | 1.747 |
+| Share of 2010 cost in top-10% predicted | 24.8% | 24.0% | 19.9% |
+
+High-cost claimant classifier: **AUC 0.733**, **3.1× lift** in the top decile. Score PSI 0.046.
+**Validation rating:** Needs improvement - conditionally fit for use with compensating controls (1 High / 2 Medium / 5 Low findings). *Data: CMS 2008-2010 Data Entrepreneurs' Synthetic Public Use File (DE-SynPUF), Sample 1; run 2026-10-06.*
 <!-- RESULTS:END -->
 
 ## What the project does
