@@ -53,6 +53,7 @@ def bene_year(rng, base, year, cc_state, cost_state):
     op = np.where(rng.random(n) < 0.75, np.round(rng.gamma(0.9, mu * 0.6) / 10) * 10, 0)
     car = np.where(rng.random(n) < 0.85, np.round(rng.gamma(1.1, mu * 0.9) / 10) * 10, 0)
     df["MEDREIMB_IP"], df["BENRES_IP"], df["PPPYMT_IP"] = ip, np.where(ip > 0, 1068, 0), np.where(rng.random(n) < 0.03, ip * 0.1, 0)
+    op = np.where(rng.random(n) < 0.004, -10 * rng.integers(1, 40, n), op)   # rare negative adjustments (as in DE-SynPUF)
     df["MEDREIMB_OP"], df["BENRES_OP"], df["PPPYMT_OP"] = op, np.round(op * 0.25), 0
     df["MEDREIMB_CAR"], df["BENRES_CAR"], df["PPPYMT_CAR"] = car, np.round(car * 0.27), 0
     return df, has_ip, ip, op
