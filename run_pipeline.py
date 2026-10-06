@@ -38,7 +38,8 @@ def main(synthetic=False):
     meta = {"data_source": ("SYNTHETIC TEST SAMPLE (schema-identical generator) - NOT CMS DATA" if synthetic
                             else "CMS 2008-2010 Data Entrepreneurs' Synthetic Public Use File (DE-SynPUF), Sample 1"),
             "synthetic": synthetic, "run_date": str(date.today()), "hcc_threshold": thr,
-            "n_train": len(train), "n_test": len(test), "n_oot": len(oot)}
+            "n_train": len(train), "n_test": len(test), "n_oot": len(oot),
+            "n_negative_target_floored": df.attrs.get("n_negative_target", 0)}
     print("[6/7] Report, figures, results.json ...")
     figs = report.figures(R)
     res = report.results_json(R, dq, waterfall, fnd, rating, meta)
