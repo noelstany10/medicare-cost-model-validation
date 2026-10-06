@@ -34,6 +34,7 @@ def main(synthetic=False):
     train, test, oot, thr = models.split(df)
     reg, clf = models.train_all(train)
     print("[5/7] Independent validation ...");           R = validation.run(train, test, oot, reg, clf)
+    R["recon"] = recon
     fnd, rating = validation.findings(R, dq)
     meta = {"data_source": ("SYNTHETIC TEST SAMPLE (schema-identical generator) - NOT CMS DATA" if synthetic
                             else "CMS 2008-2010 Data Entrepreneurs' Synthetic Public Use File (DE-SynPUF), Sample 1"),
@@ -42,7 +43,7 @@ def main(synthetic=False):
             "n_negative_target_floored": df.attrs.get("n_negative_target", 0)}
     print("[6/7] Report, figures, results.json ...")
     figs = report.figures(R)
-    res = report.results_json(R, dq, waterfall, fnd, rating, meta)
+    res = report.results_json(R, dq, waterfall, fnd, rating, meta, recon)
     report.markdown(R, dq, recon, waterfall, fnd, rating, figs, meta)
     if not synthetic:
         report.update_readme(R, fnd, rating, meta)
