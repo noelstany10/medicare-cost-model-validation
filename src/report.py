@@ -163,6 +163,7 @@ def update_readme(R, findings, rating, meta):
 High-cost claimant classifier: **AUC {ct.AUC:.3f}** in-time (**{ct.Lift_top10:.1f}× lift** in top decile); AUC {c.AUC:.3f} out-of-time.
 
 {kf}
+
 **Validation rating:** {rating} ({sev.get('High', 0)} High / {sev.get('Medium', 0)} Medium / {sev.get('Low', 0)} Low findings). *Data: {meta['data_source']}; run {meta['run_date']}.*
 <!-- RESULTS:END -->"""
     txt = path.read_text()
