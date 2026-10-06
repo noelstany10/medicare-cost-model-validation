@@ -233,6 +233,9 @@ Inpatient claim-to-summary reconciliation (claims `CLM_PMT_AMT` vs summary `MEDR
 
 ## 4. Conceptual soundness
 
+* **Negative reimbursements:** {meta.get('n_negative_target_floored', 0):,} beneficiary-years had a negative net
+  next-year Medicare reimbursement (payment adjustments). The target was floored at $0 for modelling; prior-year cost
+  features are floored the same way. See DQ-09.
 * **Target definition** is consistent with prospective risk adjustment practice (SOA risk-adjuster studies): concurrent-year
   information predicts the following year's cost. No outcome-year information enters the feature set.
 * **Leakage review:** forbidden columns in model = `{R['leakage']['forbidden_features_in_model']}`; highest single feature

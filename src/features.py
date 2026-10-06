@@ -19,6 +19,13 @@ def build():
     waterfall = pd.read_sql("SELECT * FROM population_waterfall ORDER BY feature_year, step", con)
     member_year = pd.read_sql("SELECT * FROM member_year", con)
     con.close()
+    # DE-SynPUF contains negative net reimbursements (payment adjustments / recoupments).
+    # Cost models need a non-negative target: floor at $0 and keep the raw value for audit.
+    df["target_paid_raw"] = df[C.TARGET_COST]
+    df.attrs["n_negative_target"] = int((df[C.TARGET_COST] < 0).sum())
+    df[C.TARGET_COST] = df[C.TARGET_COST].clip(lower=0)
+    for c in ["paid_ip", "paid_op", "paid_car", "paid_total", "benres_total"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).clip(lower=0)
     df["log_paid_total"] = np.log1p(df["paid_total"])
     for c in C.NUMERIC_FEATURES:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(float)
