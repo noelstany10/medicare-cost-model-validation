@@ -100,25 +100,28 @@ def build(R, dq, findings, rating, oot, meta):
     # ---------------- Summary
     _title(ws, "Medicare Prospective Cost Model - Validation Workbook", f"Data: {meta['data_source']}  |  Run: {meta['run_date']}")
     rc = R["reg_comparison"].set_index(["model", "sample"])
-    o = rc.loc[(M.CHAMPION_REG, "OOT 2009->2010")]
-    cc = R["clf_comparison"].set_index(["model", "sample"]).loc[(M.CHAMPION_CLF, "OOT 2009->2010")]
+    o = rc.loc[(M.CHAMPION_REG, "OOT normalised")]
+    t = rc.loc[(M.CHAMPION_REG, "Test (in-time)")]
+    cc = R["clf_comparison"].set_index(["model", "sample"]).loc[(M.CHAMPION_CLF, "OOT relative top 10%")]
     ws["A4"], ws["B4"] = "Overall validation rating", rating
     ws["A4"].font = ws["B4"].font = Font(bold=True)
     rows = [
         ("Out-of-time members scored", f"=COUNT({PRED})", "#,##0"),
         ("Total predicted 2010 cost ($)", f"=SUM({PRED})", "#,##0"),
         ("Total actual 2010 cost ($)", f"=SUM({ACT})", "#,##0"),
-        ("Predictive ratio (pred / actual)", "=B7/B8", "0.000"),
-        ("R-squared (OOT)", f"=RSQ({ACT},{PRED})", "0.000"),
-        ("Cumming's Prediction Measure (OOT)", float(o.CPM), "0.000"),
-        ("Mean absolute error ($)", float(o.MAE), "#,##0"),
-        ("High-cost claimant AUC (OOT)", float(cc.AUC), "0.000"),
-        ("High-cost lift, top decile", float(cc.Lift_top10), "0.00\"x\""),
+        ("Raw predictive ratio (pred / actual)", "=B7/B8", "0.000"),
+        ("Normalisation factor (actual / pred)", "=B8/B7", "0.000"),
+        ("Correlation-squared, OOT (scale-free)", f"=RSQ({ACT},{PRED})", "0.000"),
+        ("R-squared, in-time test", float(t.R2), "0.000"),
+        ("Cumming's Prediction Measure, OOT normalised", float(o.CPM), "0.000"),
+        ("High-cost claimant AUC, OOT (relative top 10%)", float(cc.AUC), "0.000"),
+        ("High-cost lift, top decile (OOT)", float(cc.Lift_top10), "0.00\"x\""),
         ("Score PSI (dev vs OOT)", "=PSI_Stability!H14", "0.000"),
         ("High findings", '=COUNTIF(Findings!C:C,"High")', "0"),
         ("Medium findings", '=COUNTIF(Findings!C:C,"Medium")', "0"),
         ("Low findings", '=COUNTIF(Findings!C:C,"Low")', "0"),
         ("Data-quality checks failed", '=COUNTIF(Data_Quality!F:F,"FAIL")', "0"),
+        ("Mean paid per beneficiary, YoY change (outcome year)", float(R["recon"]["yoy_change"].iloc[-1]) if "recon" in R else 0.0, "0.0%"),
     ]
     _header(ws, 5, ["Key metric", "Value"])
     for i, (k, v, f) in enumerate(rows, 6):
@@ -126,10 +129,10 @@ def build(R, dq, findings, rating, oot, meta):
         c = ws.cell(row=i, column=2, value=v); c.number_format = f; c.border = THIN
     ws.conditional_formatting.add("B9", CellIsRule(operator="between", formula=["0.95", "1.05"], fill=GOOD))
     ws.conditional_formatting.add("B9", CellIsRule(operator="notBetween", formula=["0.95", "1.05"], fill=AMBER))
-    ws.conditional_formatting.add("B15", CellIsRule(operator="lessThan", formula=["0.1"], fill=GOOD))
-    ws.conditional_formatting.add("B15", CellIsRule(operator="greaterThanOrEqual", formula=["0.1"], fill=AMBER))
-    ws["A22"] = "Sheets: Findings | Data_Quality | Model_Comparison | Decile_Backtest | PSI_Stability | Segment_Calibration | Sensitivity | Pivot_Analysis | Scored_Members (Excel Table 'tblScored' - Insert > PivotTable)"
-    ws["A22"].font = Font(italic=True, color="595959")
+    ws.conditional_formatting.add("B16", CellIsRule(operator="lessThan", formula=["0.1"], fill=GOOD))
+    ws.conditional_formatting.add("B16", CellIsRule(operator="greaterThanOrEqual", formula=["0.1"], fill=AMBER))
+    ws["A24"] = "Sheets: Findings | Data_Quality | Model_Comparison | Decile_Backtest | PSI_Stability | Segment_Calibration | Sensitivity | Pivot_Analysis | Scored_Members (Excel Table 'tblScored' - Insert > PivotTable)"
+    ws["A24"].font = Font(italic=True, color="595959")
     _widths(ws, [38, 70])
 
     # ---------------- Findings
@@ -171,7 +174,9 @@ def build(R, dq, findings, rating, oot, meta):
     # ---------------- Decile backtest with formulas + chart
     b = sheets["Decile_Backtest"]
     _title(b, "Out-of-time decile backtest (2009 features -> 2010 actual)", "Sums are computed live from Scored_Members with SUMIFS")
-    _header(b, 3, ["Decile", "Members", "Predicted $", "Actual $", "Mean predicted", "Mean actual", "Predictive ratio", "Cum. % actual cost", "HCC rate"])
+    _header(b, 3, ["Decile", "Members", "Predicted $", "Actual $", "Mean predicted", "Mean actual", "Predictive ratio", "Cum. % actual cost", "HCC rate", "Normalised PR"])
+    b["L1"], b["M1"] = "Normalisation factor", "=D14/C14"
+    b["M1"].number_format = "0.000"; b["M1"].fill = INPUT
     for i in range(1, 11):
         r = 3 + i
         b.cell(row=r, column=1, value=i)
@@ -183,15 +188,17 @@ def build(R, dq, findings, rating, oot, meta):
         b.cell(row=r, column=7, value=f"=C{r}/D{r}").number_format = "0.000"
         b.cell(row=r, column=8, value=f"=SUM($D$4:D{r})/SUM($D$4:$D$13)").number_format = "0.0%"
         b.cell(row=r, column=9, value=f"=AVERAGEIFS({HCC},{DEC},A{r})").number_format = "0.0%"
+        b.cell(row=r, column=10, value=f"=G{r}*$M$1").number_format = "0.000"
     b["A14"], b["B14"], b["C14"], b["D14"], b["G14"] = "Total", "=SUM(B4:B13)", "=SUM(C4:C13)", "=SUM(D4:D13)", "=C14/D14"
     b["C14"].number_format = b["D14"].number_format = "#,##0"; b["G14"].number_format = "0.000"
     b.conditional_formatting.add("G4:G14", CellIsRule(operator="notBetween", formula=["0.85", "1.15"], fill=AMBER))
+    b.conditional_formatting.add("J4:J13", CellIsRule(operator="notBetween", formula=["0.85", "1.15"], fill=AMBER))
     ch = BarChart(); ch.type = "col"; ch.title = "Mean predicted vs actual cost by risk decile"
     ch.add_data(Reference(b, min_col=5, max_col=6, min_row=3, max_row=13), titles_from_data=True)
     ch.set_categories(Reference(b, min_col=1, min_row=4, max_row=13))
     ch.y_axis.title = "$ per member"; ch.x_axis.title = "Risk decile"; ch.height, ch.width = 8, 16
     ch.series[0].graphicalProperties.solidFill = "2A78D6"; ch.series[1].graphicalProperties.solidFill = "EB6834"
-    b.add_chart(ch, "K3")
+    b.add_chart(ch, "L3")
     _widths(b, [8, 10, 14, 14, 14, 14, 14, 16, 10])
 
     # ---------------- PSI with formulas
@@ -259,6 +266,12 @@ def build(R, dq, findings, rating, oot, meta):
         pv.cell(row=i, column=4, value=f'=IFERROR(SUMIFS({PRED},{AGE},$A{i},{DEC},{dsel})/SUMIFS({ACT},{AGE},$A{i},{DEC},{dsel}),"-")').number_format = "0.000"
         pv.cell(row=i, column=5, value=f'=COUNTIFS({AGE},$A{i},{DEC},{dsel})').number_format = "#,##0"
         pv.cell(row=i, column=6, value=f'=IFERROR(SUMIFS({ACT},{AGE},$A{i},{DEC},{dsel})/E{i},"-")').number_format = "#,##0"
+    pv["H3"], pv["I3"] = "Show PR normalised? (Y/N)", "Y"
+    pv["I3"].fill = INPUT
+    for r in range(6, 12):
+        for c in (2, 3, 4):
+            cell = pv.cell(row=r, column=c)
+            cell.value = '=IFERROR(' + cell.value[1:] + '*IF($I$3="Y",Decile_Backtest!$M$1,1),"-")'
     pv.conditional_formatting.add("B6:D11", CellIsRule(operator="notBetween", formula=["0.85", "1.15"], fill=AMBER))
     lc = LineChart(); lc.title = "Predictive ratio by age band"; lc.height, lc.width = 7, 14
     lc.add_data(Reference(pv, min_col=2, max_col=3, min_row=5, max_row=11), titles_from_data=True)

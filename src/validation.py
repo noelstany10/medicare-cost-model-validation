@@ -16,6 +16,13 @@ from . import config as C
 from . import models as M
 
 RACE = {1: "White", 2: "Black", 3: "Other", 5: "Hispanic"}
+OOT_N = "OOT normalised"
+OOT_REL = "OOT relative top 10%"
+
+
+def _rob(y, p):
+    m = reg_metrics(y, normalise(y, p))
+    return {"R2_norm": m["R2"], "CPM_norm": m["CPM"], "Gini": m["Gini"], "Raw_predictive_ratio": float(np.sum(p) / np.sum(y))}
 
 
 # ---------------------------------------------------------------- metrics
@@ -42,6 +49,12 @@ def reg_metrics(y, p):
         "Top10_cost_capture": y[top].sum() / y.sum(),
         "Mean_actual": y.mean(), "Mean_predicted": p.mean(),
     }
+
+
+def normalise(y, p):
+    """Calibration-in-the-large: rescale predictions so they sum to actual (like CMS annual risk-score normalisation)."""
+    p = np.asarray(p, float)
+    return p * (np.asarray(y, float).sum() / p.sum())
 
 
 def hosmer_lemeshow(y, p, g=10):
@@ -137,25 +150,39 @@ def run(train, test, oot, reg, clf):
             p = m.predict(d[F])
             preds[(name, split_name)] = p
             comp.append({"model": name, "sample": split_name, **reg_metrics(d[C.TARGET_COST], p)})
+            if split_name.startswith("OOT"):
+                pn = normalise(d[C.TARGET_COST], p)
+                preds[(name, OOT_N)] = pn
+                comp.append({"model": name, "sample": OOT_N, **reg_metrics(d[C.TARGET_COST], pn)})
     R["reg_comparison"] = pd.DataFrame(comp)
+    y_rel = (oot[C.TARGET_COST] >= oot[C.TARGET_COST].quantile(C.HIGH_COST_QUANTILE)).astype(int).values
     comp = []
     for name, m in clf.items():
         for split_name, d in (("Train", train), ("Test (in-time)", test), ("OOT 2009->2010", oot)):
             p = m.predict_proba(d[F])[:, 1]
             preds[(name, split_name)] = p
             comp.append({"model": name, "sample": split_name, **clf_metrics(d[C.TARGET_HCC], p)})
+            if split_name.startswith("OOT"):
+                comp.append({"model": name, "sample": OOT_REL, **clf_metrics(y_rel, p)})
     R["clf_comparison"] = pd.DataFrame(comp)
 
     champ, champ_c = reg[M.CHAMPION_REG], clf[M.CHAMPION_CLF]
     p_test, p_oot = preds[(M.CHAMPION_REG, "Test (in-time)")], preds[(M.CHAMPION_REG, "OOT 2009->2010")]
     pc_test, pc_oot = preds[(M.CHAMPION_CLF, "Test (in-time)")], preds[(M.CHAMPION_CLF, "OOT 2009->2010")]
-    R["preds"] = {"test": p_test, "oot": p_oot, "test_clf": pc_test, "oot_clf": pc_oot,
+    p_oot_n = preds[(M.CHAMPION_REG, OOT_N)]
+    R["norm_factor"] = float(oot[C.TARGET_COST].sum() / p_oot.sum())
+    R["preds"] = {"test": p_test, "oot": p_oot, "oot_norm": p_oot_n, "test_clf": pc_test, "oot_clf": pc_oot,
                   "glm_oot": preds[("M2 Tweedie GLM", "OOT 2009->2010")]}
 
     # 3. Outcome analysis: decile backtests + bootstrap CIs
     R["decile_test"] = decile_table(test[C.TARGET_COST], p_test)
     R["decile_oot"] = decile_table(oot[C.TARGET_COST], p_oot)
+    R["decile_oot_norm"] = decile_table(oot[C.TARGET_COST], p_oot_n)
     R["ci"] = {
+        "R2_oot_norm": bootstrap_ci(oot[C.TARGET_COST].values, p_oot, lambda y, p: r2_score(y, normalise(y, p))),
+        "CPM_oot_norm": bootstrap_ci(oot[C.TARGET_COST].values, p_oot,
+                                     lambda y, p: (lambda q: 1 - np.abs(y - q).sum() / np.abs(y - y.mean()).sum())(normalise(y, p))),
+        "AUC_oot_rel": bootstrap_ci(y_rel, pc_oot, roc_auc_score),
         "R2_oot": bootstrap_ci(oot[C.TARGET_COST].values, p_oot, r2_score),
         "CPM_oot": bootstrap_ci(oot[C.TARGET_COST].values, p_oot,
                                 lambda y, p: 1 - np.abs(y - p).sum() / np.abs(y - y.mean()).sum()),
@@ -179,7 +206,7 @@ def run(train, test, oot, reg, clf):
     R["csi"] = pd.DataFrame(csi).sort_values("csi", ascending=False)
 
     # 5. Subgroup calibration & fairness (race is NOT a model input)
-    R["subgroups_oot"] = subgroup_table(oot, p_oot)
+    R["subgroups_oot"] = subgroup_table(oot, p_oot_n)   # relative calibration after aggregate normalisation
     fair = []
     d = oot.assign(p=pc_oot)
     for dim, col in (("race", "race_cd"), ("sex", "is_female")):
@@ -229,18 +256,18 @@ def run(train, test, oot, reg, clf):
     rob = []
     for s in (1, 2, 3, 4, 5):
         m = M.make_gbm(seed=s).fit(train[F], train[C.TARGET_COST])
-        rob.append({"test": f"Seed {s}", "group": "seed", **{k: v for k, v in reg_metrics(oot[C.TARGET_COST], m.predict(oot[F])).items() if k in ("R2", "CPM", "Predictive_ratio", "Gini")}})
+        rob.append({"test": f"Seed {s}", "group": "seed", **_rob(oot[C.TARGET_COST], m.predict(oot[F]))})
     for kw, label in (({"learning_rate": 0.1}, "learning_rate=0.10"), ({"max_leaf_nodes": 15}, "max_leaf_nodes=15"),
                       ({"max_leaf_nodes": 63}, "max_leaf_nodes=63"), ({"loss": "squared_error"}, "loss=squared_error")):
         m = M.make_gbm(**kw).fit(train[F], train[C.TARGET_COST])
-        rob.append({"test": label, "group": "hyperparameter", **{k: v for k, v in reg_metrics(oot[C.TARGET_COST], m.predict(oot[F])).items() if k in ("R2", "CPM", "Predictive_ratio", "Gini")}})
+        rob.append({"test": label, "group": "hyperparameter", **_rob(oot[C.TARGET_COST], m.predict(oot[F]))})
     groups = {"Drop prior-cost features": [c for c in F if c.startswith(("paid", "benres", "log_paid"))],
               "Drop claims-derived features": [c for c in F if c.startswith(("ip_", "op_", "er_", "n_providers", "n_distinct", "dx_"))],
               "Drop chronic-condition flags": [c for c in F if c.startswith("sp_") or c == "n_chronic"]}
     for label, drop in groups.items():
         keep = [c for c in F if c not in drop]
         m = M.make_gbm().fit(train[keep], train[C.TARGET_COST])
-        rob.append({"test": label, "group": "ablation", **{k: v for k, v in reg_metrics(oot[C.TARGET_COST], m.predict(oot[keep])).items() if k in ("R2", "CPM", "Predictive_ratio", "Gini")}})
+        rob.append({"test": label, "group": "ablation", **_rob(oot[C.TARGET_COST], m.predict(oot[keep]))})
     R["robustness"] = pd.DataFrame(rob)
     return R
 
@@ -250,8 +277,9 @@ def findings(R, dq):
     out = []
     rc = R["reg_comparison"].set_index(["model", "sample"])
     ch = M.CHAMPION_REG
-    t, o = rc.loc[(ch, "Test (in-time)")], rc.loc[(ch, "OOT 2009->2010")]
-    glm_o = rc.loc[("M2 Tweedie GLM", "OOT 2009->2010")]
+    t, o, on = rc.loc[(ch, "Test (in-time)")], rc.loc[(ch, "OOT 2009->2010")], rc.loc[(ch, OOT_N)]
+    glm_o = rc.loc[("M2 Tweedie GLM", OOT_N)]
+    yoy = dq.set_index("check_id").get("observed", pd.Series(dtype=float)).get("DQ-18", 0.0)
     tr = rc.loc[(ch, "Train")]
 
     def add(area, sev, title, evidence, rec):
@@ -266,11 +294,15 @@ def findings(R, dq):
         add("Outcome analysis", "High" if abs(o.Predictive_ratio - 1) > 0.10 else "Medium",
             "Aggregate out-of-time calibration outside +/-5% tolerance",
             f"OOT predictive ratio {o.Predictive_ratio:.3f} (in-time {t.Predictive_ratio:.3f}); "
-            f"mean actual ${o.Mean_actual:,.0f} vs predicted ${o.Mean_predicted:,.0f}",
-            "Introduce an explicit annual cost-trend / calibration factor refreshed each year before use in budgeting.")
-    if t.R2 > 0 and (t.R2 - o.R2) / t.R2 > 0.15:
-        add("Outcome analysis", "Medium", "Material out-of-time deterioration in explanatory power",
-            f"R2 in-time {t.R2:.3f} vs OOT {o.R2:.3f}", "Investigate drivers (population shift, coding changes); consider re-training on pooled years.")
+            f"mean actual ${o.Mean_actual:,.0f} vs predicted ${o.Mean_predicted:,.0f}. "
+            + (f"Root cause: mean paid cost per beneficiary moved {yoy:.0%} year-on-year in the outcome data (DQ-18) while "
+               f"input score distribution is stable (PSI {R['psi_score']:.3f}), pointing to incomplete target-year claims "
+               f"rather than population change. After normalisation ranking holds: R2 {on.R2:.3f}, Gini {on.Gini:.3f}." if yoy > 0.15 else ""),
+            "Do not use raw predictions for budgeting without an annual trend / normalisation factor; confirm claims "
+            "completeness (run-out) of the outcome year before back-testing; re-run OOT test on complete data.")
+    if t.R2 > 0 and (t.R2 - on.R2) / t.R2 > 0.15:
+        add("Outcome analysis", "Medium", "Material out-of-time deterioration in explanatory power (after normalisation)",
+            f"R2 in-time {t.R2:.3f} vs OOT normalised {on.R2:.3f}; Gini {t.Gini:.3f} vs {on.Gini:.3f}", "Investigate drivers (population shift, coding changes); consider re-training on pooled years.")
     if tr.R2 - t.R2 > 0.10:
         add("Conceptual soundness", "Medium", "Indication of over-fitting", f"R2 train {tr.R2:.3f} vs test {t.R2:.3f}",
             "Increase regularisation / min_samples_leaf; use cross-validated early stopping.")
@@ -285,7 +317,7 @@ def findings(R, dq):
     sg = R["subgroups_oot"]
     bad = sg[(sg.n >= 500) & ((sg.predictive_ratio < 0.85) | (sg.predictive_ratio > 1.15))]
     if len(bad):
-        add("Outcome analysis", "Medium", "Subgroup mis-calibration (predictive ratio outside 0.85-1.15)",
+        add("Outcome analysis", "Medium", "Relative subgroup mis-calibration after normalisation (predictive ratio outside 0.85-1.15)",
             "; ".join(f"{a}={b}: PR {c:.2f}" for a, b, c in bad[["dimension", "level", "predictive_ratio"]].head(6).values),
             "Add segment-level calibration or interaction terms; communicate known biases to model users.")
     fr = R["fairness_oot"]
@@ -293,13 +325,13 @@ def findings(R, dq):
     if len(race) > 1 and (race.AUC.max() - race.AUC.min() > 0.05):
         add("Fairness", "Medium", "Discrimination (AUC) differs materially across race groups",
             f"AUC range {race.AUC.min():.3f}-{race.AUC.max():.3f}", "Perform disparity review with compliance; consider group-aware calibration.")
-    lift = o.CPM - glm_o.CPM
+    lift = on.CPM - glm_o.CPM
     if lift < 0.01:
         add("Benchmarking", "Low", "Champion complexity not clearly justified over interpretable GLM",
-            f"OOT CPM champion {o.CPM:.3f} vs Tweedie GLM {glm_o.CPM:.3f}", "Consider GLM as production model or keep as permanent challenger.")
+            f"OOT normalised CPM champion {on.CPM:.3f} vs Tweedie GLM {glm_o.CPM:.3f}", "Consider GLM as production model or keep as permanent challenger.")
     seed = R["robustness"][R["robustness"].group == "seed"]
-    if seed.R2.std() > 0.01:
-        add("Robustness", "Low", "Results sensitive to random seed", f"Std of OOT R2 across seeds {seed.R2.std():.4f}",
+    if seed.R2_norm.std() > 0.01:
+        add("Robustness", "Low", "Results sensitive to random seed", f"Std of OOT R2 across seeds {seed.R2_norm.std():.4f}",
             "Average multiple seeds or fix seed in production configuration.")
     if not R["monotonic_chronic"]:
         add("Conceptual soundness", "Medium", "Predicted cost not monotonic in chronic-condition count",

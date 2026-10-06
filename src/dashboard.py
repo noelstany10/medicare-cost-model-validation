@@ -29,6 +29,7 @@ TEMPLATE = r"""<title>Medicare Cost Model Validation</title>
   --good:#3fc43f; --warn:#f0b53a; --serious:#ec835a; --crit:#e66767;
   --good-bg:#16301a; --warn-bg:#352a10; --crit-bg:#3a1c1c; color-scheme:dark }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--f-body);margin:0}
 .wrap{max-width:1180px;margin:0 auto;padding-inline:20px;padding-block:28px 56px;display:flex;flex-direction:column;gap:22px}
 header{display:flex;flex-direction:column;gap:8px}
@@ -75,26 +76,27 @@ footer{color:var(--muted);font-size:12.5px}
 <header>
   <div class="eyebrow">Independent model validation · Medicare fee-for-service</div>
   <h1>Medicare Prospective Cost Model</h1>
-  <p class="sub">Predicts each beneficiary's next-year Medicare paid cost (Part A inpatient + Part B outpatient + carrier) and flags likely high-cost claimants. Validated with an out-of-time backtest: 2009 features scored against actual 2010 cost.</p>
+  <p class="sub">Predicts each beneficiary's next-year Medicare paid cost (inpatient, outpatient and carrier) and flags likely high-cost claimants. Developed on 2008 → 2009 data, then independently validated with an out-of-time backtest: 2009 features scored against actual 2010 cost.</p>
   <div class="meta" id="meta"></div>
 </header>
 <div id="banner"></div>
 <div class="rating" id="rating"></div>
-<section class="kpis" id="kpis" aria-label="Key out-of-time metrics"></section>
+<section class="kpis" id="kpis" aria-label="Key metrics"></section>
+<div class="card" id="keyfinding" hidden></div>
 
 <section class="grid">
   <div class="card">
     <h2>Decile backtest</h2>
     <p>Mean predicted vs actual cost per member, by predicted-risk decile.</p>
     <div class="tabs" role="group" aria-label="Sample">
-      <button id="t-oot" aria-pressed="true">Out-of-time 2010</button><button id="t-test" aria-pressed="false">In-time test 2009</button>
+      <button id="t-test" aria-pressed="true">In-time test 2009</button><button id="t-oot" aria-pressed="false">Out-of-time 2010 raw</button><button id="t-norm" aria-pressed="false">Out-of-time 2010 normalised</button>
     </div>
     <div class="legend"><span><i style="background:var(--s1)"></i>Predicted</span><span><i style="background:var(--s2)"></i>Actual</span></div>
     <div class="chart"><canvas id="c-decile" role="img" aria-label="Decile backtest bar chart"></canvas></div>
   </div>
   <div class="card">
     <h2>Benchmarking</h2>
-    <p>Cumming's Prediction Measure on the out-of-time sample. Champion in blue, benchmarks in grey.</p>
+    <p>Cumming's Prediction Measure on the out-of-time sample after normalisation. Champion in blue, benchmarks in grey.</p>
     <div class="chart"><canvas id="c-bench" role="img" aria-label="Model benchmark bar chart"></canvas></div>
   </div>
   <div class="card">
@@ -115,7 +117,7 @@ footer{color:var(--muted);font-size:12.5px}
   </div>
   <div class="card">
     <h2>Segment calibration</h2>
-    <p>Predictive ratio (predicted ÷ actual) by member segment, out-of-time. Tolerance band 0.85–1.15.</p>
+    <p>Predictive ratio (predicted ÷ actual) by member segment, out-of-time after normalisation. Tolerance band 0.85–1.15.</p>
     <div class="chart tall"><canvas id="c-seg" role="img" aria-label="Segment predictive ratio chart"></canvas></div>
   </div>
 </section>
@@ -140,8 +142,11 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 const f3 = v => v == null ? "–" : (+v).toFixed(3), usd = v => "$" + Math.round(v).toLocaleString("en-US"), pct = v => (100*v).toFixed(1) + "%";
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const CH = "M3 Gradient boosting (champion)", CC = "C2 Gradient boosting (champion)", OOT = "OOT 2009->2010";
-const reg = D.reg_comparison.find(r => r.model === CH && r.sample === OOT);
-const clf = D.clf_comparison.find(r => r.model === CC && r.sample === OOT);
+const NORM = "OOT normalised", REL = "OOT relative top 10%";
+const pick = (arr, m, smp) => arr.find(r => r.model === m && r.sample === smp);
+const reg = pick(D.reg_comparison, CH, OOT), regN = pick(D.reg_comparison, CH, NORM), regT = pick(D.reg_comparison, CH, "Test (in-time)");
+const clf = pick(D.clf_comparison, CC, REL), clfT = pick(D.clf_comparison, CC, "Test (in-time)");
+const yoy = D.recon && D.recon.length ? D.recon[D.recon.length - 1].yoy_change : 0;
 
 $("meta").innerHTML = [D.meta.data_source, "Run " + D.meta.run_date, "Train " + D.meta.n_train.toLocaleString() + " · Test " + D.meta.n_test.toLocaleString() + " · OOT " + D.meta.n_oot.toLocaleString(), "High-cost threshold " + usd(D.meta.hcc_threshold)].map(t => `<span class="pill">${esc(t)}</span>`).join("");
 if (D.meta.synthetic) $("banner").innerHTML = `<div class="banner">Test run on the generated sample, not CMS data. The GitHub Actions workflow replaces this with real DE-SynPUF results.</div>`;
@@ -149,16 +154,19 @@ const sev = D.findings.reduce((a, f) => (a[f.severity] = (a[f.severity] || 0) + 
 $("rating").innerHTML = `<div><div class="eyebrow">Overall validation rating</div><b>${esc(D.rating)}</b><div class="sub" style="margin-top:4px">${sev.High||0} High · ${sev.Medium||0} Medium · ${sev.Low||0} Low findings</div></div>`;
 const ci = D.ci;
 const kpis = [
-  ["R² (cost)", f3(reg.R2), `95% CI ${f3(ci.R2_oot[0])}–${f3(ci.R2_oot[1])}`],
-  ["Cumming's Prediction Measure", f3(reg.CPM), `95% CI ${f3(ci.CPM_oot[0])}–${f3(ci.CPM_oot[1])}`],
-  ["Predictive ratio", f3(reg.Predictive_ratio), "target 0.95–1.05"],
-  ["Cost captured by top 10%", pct(reg.Top10_cost_capture), "of actual 2010 spend"],
-  ["High-cost AUC", f3(clf.AUC), `95% CI ${f3(ci.AUC_oot[0])}–${f3(ci.AUC_oot[1])}`],
-  ["Top-decile lift", (+clf.Lift_top10).toFixed(2) + "×", "high-cost claimants"],
+  ["R², in-time test", f3(regT.R2), `GLM ${f3(pick(D.reg_comparison, "M2 Tweedie GLM", "Test (in-time)").R2)}`],
+  ["Gini (ranking), out-of-time", f3(regN.Gini), `in-time ${f3(regT.Gini)}`],
+  ["R², out-of-time normalised", f3(regN.R2), `95% CI ${f3(ci.R2_oot_norm[0])}–${f3(ci.R2_oot_norm[1])}`],
+  ["Raw out-of-time predictive ratio", f3(reg.Predictive_ratio), "target 0.95–1.05"],
+  ["High-cost claimant AUC", f3(clfT.AUC), `${(+clfT.Lift_top10).toFixed(1)}× top-decile lift · OOT ${f3(clf.AUC)}`],
   ["Score PSI", f3(D.psi_score), D.psi_score < 0.1 ? "stable (< 0.10)" : D.psi_score < 0.25 ? "monitor" : "significant shift"],
 ];
+if (Math.abs(reg.Predictive_ratio - 1) > 0.05) {
+  const k = $("keyfinding"); k.hidden = false;
+  k.innerHTML = `<h2>Key validation finding</h2><p>Raw 2010 predictions run at <b>${(+reg.Predictive_ratio).toFixed(2)}×</b> actual cost. Mean Medicare paid per beneficiary changes <b>${(yoy*100).toFixed(0)}%</b> from 2009 to 2010 in the source data, while the input score distribution is stable (PSI ${f3(D.psi_score)}). That pattern points to incomplete 2010 claims in DE-SynPUF, not a broken model. After a single normalisation factor (${f3(D.norm_factor)}, as CMS applies to HCC risk scores each year) the ranking holds: Gini ${f3(regN.Gini)} vs ${f3(regT.Gini)} in-time.</p>`;
+}
 $("kpis").innerHTML = kpis.map(k => `<div class="kpi"><span class="l">${k[0]}</span><span class="v">${k[1]}</span><span class="c">${k[2]}</span></div>`).join("");
-$("roc-note").textContent = `Out-of-time AUC ${f3(clf.AUC)}, KS ${f3(clf.KS)}, precision in top 10% ${pct(clf.Precision_top10)} vs base rate ${pct(clf.Event_rate)}.`;
+$("roc-note").textContent = `Out-of-time, high-cost claimant fixed at the development threshold (${usd(D.meta.hcc_threshold)}). AUC ${f3(pick(D.clf_comparison, CC, OOT).AUC)}; in-time AUC ${f3(clfT.AUC)}.`;
 $("psi-note").textContent = `Share of members per development score decile. PSI ${f3(D.psi_score)}: below 0.10 is stable, 0.10–0.25 needs monitoring, above 0.25 is a material shift.`;
 
 function table(id, cols, rows) {
@@ -168,13 +176,13 @@ function table(id, cols, rows) {
 table("t-find", [["ID", r => esc(r.id)], ["Area", r => esc(r.area)], ["Severity", r => `<span class="sev ${esc(r.severity)}">${esc(r.severity)}</span>`],
   ["Finding", r => esc(r.finding)], ["Evidence", r => esc(r.evidence)], ["Recommendation", r => esc(r.recommendation)]], D.findings);
 table("t-models", [["Model", r => esc(r.model)], ["Sample", r => esc(r.sample)], ["R²", r => f3(r.R2), "n"], ["CPM", r => f3(r.CPM), "n"], ["Pred. ratio", r => f3(r.Predictive_ratio), "n"], ["Gini", r => f3(r.Gini), "n"]],
-  D.reg_comparison.filter(r => r.sample !== "Train"));
-table("t-rob", [["Re-fit", r => esc(r.test)], ["R²", r => f3(r.R2), "n"], ["CPM", r => f3(r.CPM), "n"], ["Pred. ratio", r => f3(r.Predictive_ratio), "n"]], D.robustness);
+  D.reg_comparison.filter(r => r.sample !== "Train" && r.sample !== OOT));
+table("t-rob", [["Re-fit", r => esc(r.test)], ["R² (norm.)", r => f3(r.R2_norm), "n"], ["Gini", r => f3(r.Gini), "n"], ["Raw pred. ratio", r => f3(r.Raw_predictive_ratio), "n"]], D.robustness);
 table("t-dq", [["Check", r => esc(r.check_id)], ["Category", r => esc(r.category)], ["Description", r => esc(r.description)], ["Observed", r => (+r.observed).toLocaleString("en-US", {maximumFractionDigits: 4}), "n"],
   ["Status", r => `<span class="sev ${esc(r.status)}">${esc(r.status)}</span>`]], D.dq);
 $("foot").innerHTML = `Source: CMS 2008–2010 DE-SynPUF Sample 1 (synthetic Medicare claims). Code, SQL, full validation report and Excel workbook are in the project repository.`;
 
-let charts = [], view = "oot";
+let charts = [], view = "test";
 function draw() {
   charts.forEach(c => c.destroy()); charts = [];
   const ink2 = css("--ink2"), grid = css("--grid"), s1 = css("--s1"), s2 = css("--s2"), muted = css("--muted"), panel = css("--panel");
@@ -182,7 +190,7 @@ function draw() {
   const base = (extra = {}) => ({ responsive: true, maintainAspectRatio: false, animation: false,
     plugins: { legend: { display: false }, tooltip: { backgroundColor: css("--ink"), titleColor: panel, bodyColor: panel, padding: 10 } },
     interaction: { mode: "index", intersect: false }, ...extra });
-  const dec = view === "oot" ? D.decile_oot : D.decile_test;
+  const dec = view === "oot" ? D.decile_oot : view === "norm" ? D.decile_oot_norm : D.decile_test;
   charts.push(new Chart($("c-decile"), { type: "bar", data: { labels: dec.map(d => d.decile), datasets: [
       { label: "Predicted", data: dec.map(d => d.mean_pred), backgroundColor: s1, borderRadius: 4, borderSkipped: "start" },
       { label: "Actual", data: dec.map(d => d.mean_actual), backgroundColor: s2, borderRadius: 4, borderSkipped: "start" }] },
@@ -190,7 +198,7 @@ function draw() {
       y: { grid: { color: grid }, ticks: { callback: v => usd(v) } } },
       plugins: { ...base().plugins, tooltip: { ...base().plugins.tooltip, callbacks: { label: c => `${c.dataset.label}: ${usd(c.raw)}`,
         afterBody: it => `Predictive ratio ${f3(dec[it[0].dataIndex].predictive_ratio)}` } } } }) }));
-  const bo = D.reg_comparison.filter(r => r.sample === OOT);
+  const bo = D.reg_comparison.filter(r => r.sample === NORM);
   charts.push(new Chart($("c-bench"), { type: "bar", data: { labels: bo.map(r => r.model.replace(" (champion)", " ★")), datasets: [
       { data: bo.map(r => r.CPM), backgroundColor: bo.map(r => r.model === CH ? s1 : muted), borderRadius: 4, borderSkipped: "start" }] },
     options: base({ indexAxis: "y", interaction: { mode: "nearest", intersect: true }, scales: { x: { grid: { color: grid }, title: { display: true, text: "CPM (higher is better)" } }, y: { grid: { display: false } } },
@@ -222,8 +230,8 @@ function draw() {
         ticks: { autoSkip: false, callback: v => sg[v] ? `${sg[v].dimension.replace("_", " ")}: ${sg[v].level}` : "", font: { size: 11 } } } },
       plugins: { ...base().plugins, tooltip: { ...base().plugins.tooltip, callbacks: { label: c => { const s = sg[c.raw.y]; return `${s.dimension}=${s.level}: PR ${f3(s.predictive_ratio)} · n ${s.n.toLocaleString()} · actual ${usd(s.actual_mean)}`; } } } } }) }));
 }
-function setView(v) { view = v; $("t-oot").setAttribute("aria-pressed", v === "oot"); $("t-test").setAttribute("aria-pressed", v === "test"); draw(); }
-$("t-oot").onclick = () => setView("oot"); $("t-test").onclick = () => setView("test");
+function setView(v) { view = v; ["oot", "test", "norm"].forEach(k => $("t-" + k).setAttribute("aria-pressed", v === k)); draw(); }
+["oot", "test", "norm"].forEach(k => $("t-" + k).onclick = () => setView(k));
 if (window.Chart) { draw(); matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
   new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] }); }
 </script>

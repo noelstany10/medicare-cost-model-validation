@@ -78,6 +78,13 @@ def run():
     recon["ratio_claims_to_summary"] = recon["claims_ip"] / recon["summary_ip"]
     gap = float((recon["ratio_claims_to_summary"] - 1).abs().max())
     add("DQ-17", "Reconciliation", "Max |IP claims total / summary MEDREIMB_IP - 1| across years", gap, 0.05)
+    # Completeness / trend: mean Medicare paid per beneficiary by year (a large drop signals claims run-out issues)
+    pm = pd.read_sql("""SELECT FILE_YEAR yr, AVG(CAST(MEDREIMB_IP AS REAL)+CAST(MEDREIMB_OP AS REAL)+CAST(MEDREIMB_CAR AS REAL)) mean_paid
+                        FROM stg_bene GROUP BY 1 ORDER BY 1""", con)
+    pm["yoy_change"] = pm["mean_paid"].pct_change()
+    recon = recon.merge(pm, on="yr", how="left")
+    add("DQ-18", "Completeness", "Max |year-over-year change| in mean Medicare paid per beneficiary",
+        float(pm["yoy_change"].abs().max()), 0.05)
     con.close()
     return pd.DataFrame(checks), recon
 

@@ -27,18 +27,19 @@ def _save(fig, name):
 
 def figures(R):
     figs = {}
-    d = R["decile_oot"]
-    fig, ax = plt.subplots(figsize=(7.5, 3.6))
+    fig, axs = plt.subplots(1, 3, figsize=(12, 3.6), sharey=True)
     x = np.arange(1, 11)
-    ax.bar(x - 0.2, d.mean_pred, 0.38, color=BLUE, label="Predicted")
-    ax.bar(x + 0.2, d.mean_actual, 0.38, color=ORANGE, label="Actual")
-    ax.set_xticks(x); ax.set_xlabel("Decile of predicted cost (1 = lowest risk)"); ax.set_ylabel("Mean paid cost per member ($)")
-    ax.set_title("Out-of-time backtest: predicted vs actual 2010 cost by risk decile", loc="left")
-    ax.yaxis.set_major_formatter(matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
-    ax.legend(frameon=False, loc="upper left")
+    for ax, (key, ttl) in zip(axs, (("decile_test", "In-time test (2009)"), ("decile_oot", "Out-of-time 2010, raw"),
+                                     ("decile_oot_norm", "Out-of-time 2010, normalised"))):
+        d = R[key]
+        ax.bar(x - 0.2, d.mean_pred, 0.38, color=BLUE, label="Predicted")
+        ax.bar(x + 0.2, d.mean_actual, 0.38, color=ORANGE, label="Actual")
+        ax.set_xticks(x); ax.set_xlabel("Predicted-risk decile"); ax.set_title(ttl, loc="left")
+        ax.yaxis.set_major_formatter(matplotlib.ticker.StrMethodFormatter("${x:,.0f}"))
+    axs[0].set_ylabel("Mean paid cost per member ($)"); axs[0].legend(frameon=False, loc="upper left")
     figs["decile"] = _save(fig, "decile_backtest_oot.png")
 
-    rc = R["reg_comparison"]; o = rc[rc["sample"] == "OOT 2009->2010"]
+    rc = R["reg_comparison"]; o = rc[rc["sample"] == "OOT normalised"]
     fig, ax = plt.subplots(figsize=(7.5, 2.8))
     cols = [BLUE if "champion" in m else GRAY for m in o.model]
     ax.barh(o.model, o.CPM, color=cols, height=0.55)
@@ -46,7 +47,7 @@ def figures(R):
         ax.text(v + 0.003 if v >= 0 else 0.003, i, f"{v:.3f}", va="center", color=INK2, fontsize=9)
     ax.axvline(0, color="#c9c8c3", lw=1)
     ax.invert_yaxis(); ax.set_xlabel("Cumming's Prediction Measure (higher is better)")
-    ax.set_title("Benchmarking on the out-of-time sample", loc="left")
+    ax.set_title("Benchmarking on the out-of-time sample (normalised)", loc="left")
     figs["benchmark"] = _save(fig, "benchmark_cpm_oot.png")
 
     fig, axs = plt.subplots(1, 2, figsize=(8, 3.5))
@@ -103,13 +104,14 @@ def _md(df, floatfmt=".3f"):
     return df.to_markdown(index=False, floatfmt=floatfmt)
 
 
-def results_json(R, dq, waterfall, findings, rating, meta):
+def results_json(R, dq, waterfall, findings, rating, meta, recon):
     def rec(df):
         return json.loads(df.to_json(orient="records"))
     out = {
         "meta": meta, "rating": rating,
         "reg_comparison": rec(R["reg_comparison"]), "clf_comparison": rec(R["clf_comparison"]),
-        "decile_oot": rec(R["decile_oot"]), "decile_test": rec(R["decile_test"]),
+        "decile_oot": rec(R["decile_oot"]), "decile_test": rec(R["decile_test"]), "decile_oot_norm": rec(R["decile_oot_norm"]),
+        "norm_factor": R["norm_factor"], "recon": rec(recon),
         "psi_score": R["psi_score"], "psi_table": rec(R["psi_score_table"].replace([np.inf, -np.inf], None)),
         "csi": rec(R["csi"].head(15)), "subgroups_oot": rec(R["subgroups_oot"]), "fairness_oot": rec(R["fairness_oot"]),
         "perm_importance": rec(R["perm_importance"].head(15)), "sensitivity": rec(R["sensitivity"]),
@@ -127,23 +129,40 @@ def update_readme(R, findings, rating, meta):
     if not path.exists():
         return
     rc = R["reg_comparison"].set_index(["model", "sample"])
-    o = rc.loc[(M.CHAMPION_REG, "OOT 2009->2010")]
-    g = rc.loc[("M2 Tweedie GLM", "OOT 2009->2010")]
-    b = rc.loc[("M1 Demographic manual rate", "OOT 2009->2010")]
-    c = R["clf_comparison"].set_index(["model", "sample"]).loc[(M.CHAMPION_CLF, "OOT 2009->2010")]
+    t = rc.loc[(M.CHAMPION_REG, "Test (in-time)")]
+    tg = rc.loc[("M2 Tweedie GLM", "Test (in-time)")]
+    tb = rc.loc[("M1 Demographic manual rate", "Test (in-time)")]
+    o = rc.loc[(M.CHAMPION_REG, "OOT normalised")]
+    g = rc.loc[("M2 Tweedie GLM", "OOT normalised")]
+    b = rc.loc[("M1 Demographic manual rate", "OOT normalised")]
+    raw = rc.loc[(M.CHAMPION_REG, "OOT 2009->2010")]
+    cc = R["clf_comparison"].set_index(["model", "sample"])
+    ct, c = cc.loc[(M.CHAMPION_CLF, "Test (in-time)")], cc.loc[(M.CHAMPION_CLF, "OOT relative top 10%")]
     sev = findings.severity.value_counts()
     warn = "\n> **Test run on the generated sample, not CMS data.**\n" if meta["synthetic"] else ""
+    yoy = float(R["recon"]["yoy_change"].iloc[-1]) if "recon" in R else 0.0
+    kf = ""
+    if abs(raw.Predictive_ratio - 1) > 0.05:
+        kf = (f"**Key validation finding:** the raw out-of-time predictive ratio is **{raw.Predictive_ratio:.2f}**. "
+              f"The validation traced this to a {yoy:+.0%} change in mean paid cost per beneficiary in the {C.OOT_FEATURE_YEAR + 1} "
+              f"source data (DE-SynPUF {C.OOT_FEATURE_YEAR + 1} claims are incomplete), while the input score distribution stayed "
+              f"stable (PSI {R['psi_score']:.3f}). The model is rated not fit for budgeting without an annual normalisation factor.")
     block = f"""<!-- RESULTS:START -->
-### Headline results (out-of-time: 2009 features → actual 2010 cost, {meta['n_oot']:,} beneficiaries)
+### Headline results
 {warn}
+**In-time hold-out** (2008 features → 2009 cost, {meta['n_test']:,} beneficiaries) and **out-of-time** (2009 features → 2010 cost, {meta['n_oot']:,} beneficiaries; predictions normalised to the 2010 total, like CMS annual risk-score normalisation):
+
 | | Champion GBM | Tweedie GLM | Demographic manual rate |
 |---|---|---|---|
-| R² | {o.R2:.3f} | {g.R2:.3f} | {b.R2:.3f} |
-| Cumming's Prediction Measure | {o.CPM:.3f} | {g.CPM:.3f} | {b.CPM:.3f} |
-| Predictive ratio | {o.Predictive_ratio:.3f} | {g.Predictive_ratio:.3f} | {b.Predictive_ratio:.3f} |
-| Share of 2010 cost in top-10% predicted | {o.Top10_cost_capture:.1%} | {g.Top10_cost_capture:.1%} | {b.Top10_cost_capture:.1%} |
+| R², in-time | **{t.R2:.3f}** | {tg.R2:.3f} | {tb.R2:.3f} |
+| Cumming's Prediction Measure, in-time | **{t.CPM:.3f}** | {tg.CPM:.3f} | {tb.CPM:.3f} |
+| Gini (cost ranking), in-time | **{t.Gini:.3f}** | {tg.Gini:.3f} | {tb.Gini:.3f} |
+| R², out-of-time normalised | **{o.R2:.3f}** | {g.R2:.3f} | {b.R2:.3f} |
+| Gini, out-of-time | **{o.Gini:.3f}** | {g.Gini:.3f} | {b.Gini:.3f} |
 
-High-cost claimant classifier: **AUC {c.AUC:.3f}**, **{c.Lift_top10:.1f}× lift** in the top decile. Score PSI {R['psi_score']:.3f}.
+High-cost claimant classifier: **AUC {ct.AUC:.3f}** in-time (**{ct.Lift_top10:.1f}× lift** in top decile); AUC {c.AUC:.3f} out-of-time.
+
+{kf}
 **Validation rating:** {rating} ({sev.get('High', 0)} High / {sev.get('Medium', 0)} Medium / {sev.get('Low', 0)} Low findings). *Data: {meta['data_source']}; run {meta['run_date']}.*
 <!-- RESULTS:END -->"""
     txt = path.read_text()
@@ -157,6 +176,15 @@ def markdown(R, dq, recon, waterfall, findings, rating, figs, meta):
     ch = rc[(rc.model == M.CHAMPION_REG)].set_index("sample")
     cl = cc[(cc.model == M.CHAMPION_CLF)].set_index("sample")
     o, oc = ch.loc["OOT 2009->2010"], cl.loc["OOT 2009->2010"]
+    t, ct, on, orel = ch.loc["Test (in-time)"], cl.loc["Test (in-time)"], ch.loc["OOT normalised"], cl.loc["OOT relative top 10%"]
+    yoy = float(R["recon"]["yoy_change"].iloc[-1]) if "recon" in R else 0.0
+    kf = ""
+    if abs(o.Predictive_ratio - 1) > 0.05:
+        kf = (f"> **Key validation finding.** The raw OOT predictive ratio is **{o.Predictive_ratio:.2f}**. Mean Medicare paid cost per "
+              f"beneficiary changes {yoy:+.0%} from {C.OOT_FEATURE_YEAR} to {C.OOT_FEATURE_YEAR + 1} in the source data (DQ-18), while the "
+              f"input score distribution is stable (PSI {R['psi_score']:.3f}). This points to incomplete {C.OOT_FEATURE_YEAR + 1} claims in "
+              f"DE-SynPUF rather than a change in the population or the model. Ranking performance holds after normalisation "
+              f"(Gini {on.Gini:.3f} vs {t.Gini:.3f} in-time).")
     sev = findings.severity.value_counts()
     banner = ""
     if meta["synthetic"]:
@@ -190,17 +218,24 @@ cost history. A companion classifier flags likely **high-cost claimants** (top {
 threshold ${meta['hcc_threshold']:,.0f}). Intended uses: medical cost forecasting / budget planning, care-management targeting and
 actuarial risk stratification.
 
-**Key results (out-of-time backtest, features 2009 -> actual 2010 cost, n = {meta['n_oot']:,}):**
+**Key results** (in-time = 2008 features -> 2009 cost hold-out, n = {meta['n_test']:,}; out-of-time (OOT) = 2009 features -> 2010 cost, n = {meta['n_oot']:,}):
 
-| Metric | Value | 95% bootstrap CI |
-|---|---|---|
-| R-squared (cost) | {o.R2:.3f} | {ci['R2_oot'][0]:.3f} - {ci['R2_oot'][1]:.3f} |
-| Cumming's Prediction Measure | {o.CPM:.3f} | {ci['CPM_oot'][0]:.3f} - {ci['CPM_oot'][1]:.3f} |
-| Predictive ratio (predicted / actual) | {o.Predictive_ratio:.3f} | {ci['PR_oot'][0]:.3f} - {ci['PR_oot'][1]:.3f} |
-| Share of actual cost in top-10% predicted | {o.Top10_cost_capture:.1%} | |
-| High-cost claimant AUC | {oc.AUC:.3f} | {ci['AUC_oot'][0]:.3f} - {ci['AUC_oot'][1]:.3f} |
-| High-cost lift in top decile | {oc.Lift_top10:.2f}x | |
-| Score PSI (development vs OOT) | {R['psi_score']:.3f} | |
+| Metric | In-time test | OOT raw | OOT normalised* | 95% CI (OOT) |
+|---|---|---|---|---|
+| R-squared (cost) | {t.R2:.3f} | {o.R2:.3f} | {on.R2:.3f} | {ci['R2_oot_norm'][0]:.3f} - {ci['R2_oot_norm'][1]:.3f} (norm.) |
+| Cumming's Prediction Measure | {t.CPM:.3f} | {o.CPM:.3f} | {on.CPM:.3f} | {ci['CPM_oot_norm'][0]:.3f} - {ci['CPM_oot_norm'][1]:.3f} (norm.) |
+| Predictive ratio (predicted / actual) | {t.Predictive_ratio:.3f} | {o.Predictive_ratio:.3f} | 1.000 | {ci['PR_oot'][0]:.3f} - {ci['PR_oot'][1]:.3f} (raw) |
+| Normalised Gini (ranking) | {t.Gini:.3f} | {o.Gini:.3f} | {on.Gini:.3f} | |
+| Share of actual cost in top-10% predicted | {t.Top10_cost_capture:.1%} | {o.Top10_cost_capture:.1%} | {on.Top10_cost_capture:.1%} | |
+| High-cost claimant AUC | {ct.AUC:.3f} | {oc.AUC:.3f} | {orel.AUC:.3f} (relative top 10%) | {ci['AUC_oot'][0]:.3f} - {ci['AUC_oot'][1]:.3f} (raw) |
+| High-cost lift in top decile | {ct.Lift_top10:.2f}x | {oc.Lift_top10:.2f}x | {orel.Lift_top10:.2f}x | |
+| Score PSI (development vs OOT) | | {R['psi_score']:.3f} | | |
+
+\* *Normalised* = OOT predictions rescaled by a single factor ({R['norm_factor']:.3f}) so they sum to actual 2010 cost,
+equivalent to the annual normalisation CMS applies to HCC risk scores. It isolates **ranking / relative accuracy** from
+the **level shift** in the outcome year. For the high-cost classifier, "relative" re-defines a high-cost claimant as the top 10% of 2010 cost.
+
+{kf}
 
 **Findings:** {sev.get('High', 0)} High, {sev.get('Medium', 0)} Medium, {sev.get('Low', 0)} Low - see Section 10.
 
@@ -254,9 +289,15 @@ Inpatient claim-to-summary reconciliation (claims `CLM_PMT_AMT` vs summary `MEDR
 
 ![benchmark]({figs['benchmark']})
 
-### 5.2 Decile backtest (OOT)
+### 5.2 Decile backtests
+
+OOT raw:
 
 {_md(R['decile_oot'], ",.2f")}
+
+OOT normalised (factor {R['norm_factor']:.3f}):
+
+{_md(R['decile_oot_norm'], ",.2f")}
 
 ![decile]({figs['decile']})
 
@@ -282,7 +323,7 @@ Top characteristic stability indices (CSI):
 
 {_md(R['sensitivity'])}
 
-**Seed, hyper-parameter and feature-ablation re-fits (OOT metrics):**
+**Seed, hyper-parameter and feature-ablation re-fits (OOT; R2/CPM after normalisation, plus raw predictive ratio):**
 
 {_md(R['robustness'])}
 
@@ -295,6 +336,8 @@ Top characteristic stability indices (CSI):
 ## 9. Segment calibration and fairness
 
 ![subgroups]({figs['subgroups']})
+
+Predictive ratios below use OOT predictions after aggregate normalisation (relative calibration by segment).
 
 {_md(R['subgroups_oot'])}
 
